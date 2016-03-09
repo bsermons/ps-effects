@@ -16,13 +16,7 @@ import Control.Monad.Eff (Eff())
 import Control.Monad.Eff.Class (liftEff)
 import Control.Monad.Eff.Exception (Error, EXCEPTION, throwException, error)
 
-import DOM as DOM
-import DOM.HTML as DOM
-import DOM.HTML.Window as DOM
-import DOM.HTML.Types as DOM
-
 import Halogen
-import Halogen.Query as Q
 import Halogen.Query.EventSource (EventSource(..))
 import Halogen.Util (appendToBody, onLoad)
 import Halogen.HTML.Indexed as H
@@ -106,7 +100,7 @@ ui = component render eval
         [ H.text "Cancel" ]
       ]
 
-    showMsg (Done s) = H.div_ [ H.text $ "Success! " ++ s ]
+    showMsg (Done s) = H.div_ [ H.text s ]
     showMsg otherwise = H.div_ [H.text ""]
 
     eval :: Natural Query (ComponentDSL State Query (Aff (HalogenEffects (window :: WINDOW | eff))))
@@ -122,7 +116,8 @@ ui = component render eval
       pure next
 
     eval (GotResult res next) = do
-      modify (\_ -> Waiting)
+      modify (\_ -> Done res)
+      pure next
 
     eval (CancelWaiting next) = do
       get >>= liftEff' <<< cancelAuth
@@ -142,7 +137,7 @@ ui = component render eval
     cancelAuth _ = pure unit
 
 -- | Run the app
-main :: Eff (Aff (HalogenEffects AppEffects)) Unit
+main :: Eff (HalogenEffects (window :: WINDOW)) Unit
 main =
   Aff.runAff throwException (const (pure unit)) $ do
   app <- runUI ui initialState
