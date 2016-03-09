@@ -25,12 +25,12 @@ import Halogen.HTML.Events.Indexed as E
 
 import Window (WINDOW, WindowRef, closeWindow, openWindow, getProperty, hasProperty)
 
-type AppEffects = (window :: WINDOW)
+type AppEffects = HalogenEffects (window :: WINDOW)
 
 
 data State
   = Init
-  | Waiting WindowRef (Canceler (avar :: AVAR, window :: WINDOW))
+  | Waiting WindowRef (Canceler AppEffects)
   | Done String
 
 
@@ -85,7 +85,7 @@ monitor win prop = do
 
     checkLater = later' 1000 (liftEff checkForResult)
 
-ui :: forall eff. Component State Query (Aff (HalogenEffects (window :: WINDOW | eff)))
+ui :: forall eff. Component State Query (Aff AppEffects)
 ui = component render eval
   where
     render :: State -> ComponentHTML Query
@@ -103,7 +103,7 @@ ui = component render eval
     showMsg (Done s) = H.div_ [ H.text s ]
     showMsg otherwise = H.div_ [H.text ""]
 
-    eval :: Natural Query (ComponentDSL State Query (Aff (HalogenEffects (window :: WINDOW | eff))))
+    eval :: Natural Query (ComponentDSL State Query (Aff AppEffects))
     eval (OpenWindow next) = do
       win <- liftEff' $ openWindow "http://www.google.com" "TestWin" "width=300,height=400"
       case win of
@@ -137,7 +137,7 @@ ui = component render eval
     cancelAuth _ = pure unit
 
 -- | Run the app
-main :: Eff (HalogenEffects (window :: WINDOW)) Unit
+main :: Eff AppEffects Unit
 main =
   Aff.runAff throwException (const (pure unit)) $ do
   app <- runUI ui initialState
