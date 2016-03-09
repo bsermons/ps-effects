@@ -25,12 +25,12 @@ import Halogen.HTML.Events.Indexed as E
 
 import Window (WINDOW, WindowRef, closeWindow, openWindow, getProperty, hasProperty)
 
-type AppEffects = HalogenEffects (window :: WINDOW)
+type IO = HalogenEffects (window :: WINDOW)
 
 
 data State
   = Init
-  | Waiting WindowRef (Canceler AppEffects)
+  | Waiting WindowRef (Canceler IO)
   | Done String
 
 
@@ -85,7 +85,7 @@ monitor win prop = do
 
     checkLater = later' 1000 (liftEff checkForResult)
 
-ui :: forall eff. Component State Query (Aff AppEffects)
+ui :: forall eff. Component State Query (Aff IO)
 ui = component render eval
   where
     render :: State -> ComponentHTML Query
@@ -103,25 +103,25 @@ ui = component render eval
     showMsg (Done s) = H.div_ [ H.text s ]
     showMsg otherwise = H.div_ [H.text ""]
 
-    eval :: Natural Query (ComponentDSL State Query (Aff AppEffects))
+    eval :: Natural Query (ComponentDSL State Query (Aff IO))
     eval (OpenWindow next) = do
       win <- liftEff' $ openWindow "http://www.google.com" "TestWin" "width=300,height=400"
       case win of
         (Just w) -> do
           canceler <- forkQuery (monitor w "_testResult") GotResult
-          modify (\_ -> Waiting w canceler)
+          set $ Waiting w canceler
         Nothing ->
-          modify (\_ -> Done "Could not open window. Check your popup blocker.")
+          set $ Done "Could not open window. Check your popup blocker."
 
       pure next
 
     eval (GotResult res next) = do
-      modify (\_ -> Done res)
+      set $ Done res
       pure next
 
     eval (CancelWaiting next) = do
-      get >>= liftEff' <<< cancelAuth
-      modify (\_ -> Done "User canceled auth.")
+      get >>= liftAff' <<< cancelAuth
+      set $ Done "User canceled auth."
       pure next
 
 
@@ -129,15 +129,17 @@ ui = component render eval
     isBusy (Waiting _ _) = true
     isBusy _ = false
 
-    -- TODO: cancel the running monitor
-    -- cancelAuth :: forall eff1. State -> Eff (window :: WINDOW, err :: EXCEPTION, avar :: AVAR | eff1) Unit
+
+    cancelAuth :: State -> Aff IO Unit
     cancelAuth (Waiting win canceler) = do
-      -- Aff.launchAff $ Aff.cancel canceler (error "User canceled auth")
-      closeWindow win
+      Aff.cancel canceler (error "User canceled auth")
+      liftEff $ closeWindow win
+      pure unit
+
     cancelAuth _ = pure unit
 
 -- | Run the app
-main :: Eff AppEffects Unit
+main :: Eff IO Unit
 main =
   Aff.runAff throwException (const (pure unit)) $ do
   app <- runUI ui initialState
