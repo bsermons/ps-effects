@@ -25,17 +25,22 @@ import Halogen.HTML.Events.Indexed as E
 
 import Window (WINDOW, WindowRef, closeWindow, openWindow, getProperty, hasProperty)
 
-type IO = HalogenEffects (window :: WINDOW)
+import Control.Monad.Eff.Unsafe (unsafePerformEff)
+import Control.Monad.Eff.Console (CONSOLE, log)
+
+type IO = HalogenEffects (window :: WINDOW, console :: CONSOLE)
 
 
 data State
   = Init
   | Waiting WindowRef (Canceler IO)
+  | WaitingNoCanceler WindowRef
   | Done String
 
 
 data Query a
   = OpenWindow a
+  | OpenWindowNonCanceler a
   | GotResult String a
   | CancelWaiting a
 
@@ -48,10 +53,12 @@ initialState = Init
 -}
 forkQuery
   :: forall s a f eff
-   . Aff (avar :: AVAR | eff) a
+   . Aff (avar :: AVAR, console :: CONSOLE | eff) a
   -> (a -> Action f)
-  -> ComponentDSL s f (Aff (avar :: AVAR | eff)) (Canceler (avar :: AVAR | eff))
+  -> ComponentDSL s f (Aff (avar :: AVAR, console :: CONSOLE | eff)) (Canceler (avar :: AVAR, console :: CONSOLE | eff))
+
 forkQuery aff act = do
+
   v <- liftAff' makeVar
 
   canceler <- liftAff' $ forkAff do
@@ -62,8 +69,14 @@ forkQuery aff act = do
     $ EventSource
     $ SCR.producerToStallingProducer
     $ produce \emit -> do
-      flip (Aff.runAff (\_ -> emit $ Right unit)) (takeVar v) \res -> do
-        emit $ Left $ act res unit
+      Aff.runAff
+        (\_ -> do
+            log "something wrong happened."
+            emit $ Right unit)
+        (\res -> do
+            log "something went right."
+            emit $ Left $ act res unit)
+        (takeVar v)
 
   pure canceler
 
@@ -73,8 +86,9 @@ forkQuery aff act = do
 monitor :: forall eff a
    . WindowRef
   -> String
-  -> Aff (window :: WINDOW | eff) a
+  -> Aff (window :: WINDOW, console :: CONSOLE | eff) a
 monitor win prop = do
+  liftEff $ log "Monitor called"
   res <- checkLater
   if res
     then do liftEff $ getProperty win prop
@@ -94,7 +108,10 @@ ui = component render eval
       [ (showMsg s)
       , H.button
         [ E.onClick (E.input_ OpenWindow), P.disabled $ (isBusy s) ]
-        [ H.text "Effects Test" ]
+        [ H.text "Open Window" ]
+      , H.button
+        [ E.onClick (E.input_ OpenWindowNonCanceler), P.disabled $ (isBusy s) ]
+        [ H.text "Open Window (no canceler)" ]
       , H.button
         [ E.onClick (E.input_ CancelWaiting), P.disabled $ not (isBusy s) ]
         [ H.text "Cancel" ]
@@ -105,35 +122,54 @@ ui = component render eval
 
     eval :: Natural Query (ComponentDSL State Query (Aff IO))
     eval (OpenWindow next) = do
-      win <- liftEff' $ openWindow "http://www.google.com" "TestWin" "width=300,height=400"
-      case win of
-        (Just w) -> do
-          canceler <- forkQuery (monitor w "_testResult") GotResult
-          set $ Waiting w canceler
-        Nothing ->
-          set $ Done "Could not open window. Check your popup blocker."
-
+      openWin true
+      pure next
+    eval (OpenWindowNonCanceler next) = do
+      openWin false
       pure next
 
     eval (GotResult res next) = do
-      set $ Done res
+      set $ Done ("Got forked result: " ++ res)
       pure next
 
     eval (CancelWaiting next) = do
-      get >>= liftAff' <<< cancelAuth
+      liftEff' $ log "trying to cancel"
+      state <- get
+      liftAff' $ cancelAuth state
       set $ Done "User canceled auth."
       pure next
 
+    openWin withCancel = do
+      win <- liftEff' $ openWindow "http://www.purescript.org" "TestWin" "width=300,height=400"
+      case win of
+        Just w ->
+          case withCancel of
+            true -> do
+              canceler <- forkQuery (monitor w "_testResult") GotResult
+              set $ Waiting w canceler
+            false -> do
+              set $ WaitingNoCanceler w
+              result <- liftAff' $ monitor w "_testResult"
+              set $ Done ("Got immediate result: " ++ result)
+        Nothing ->
+          set $ Done "Could not open window. Check your popup blocker."
 
     isBusy :: State -> Boolean
     isBusy (Waiting _ _) = true
+    isBusy (WaitingNoCanceler _) = true
     isBusy _ = false
 
 
     cancelAuth :: State -> Aff IO Unit
-    cancelAuth (Waiting win canceler) = do
-      Aff.cancel canceler (error "User canceled auth")
+    cancelAuth (WaitingNoCanceler win) = do
+      liftEff $ log "Cenceling no canceler"
       liftEff $ closeWindow win
+      pure unit
+
+    cancelAuth (Waiting win canceler) = do
+      liftEff $ log "Canceling with canceler"
+      liftEff $ closeWindow win
+      cancelResult <- Aff.cancel canceler (error "User canceled auth")
       pure unit
 
     cancelAuth _ = pure unit
